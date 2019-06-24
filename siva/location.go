@@ -264,6 +264,10 @@ func (l *Location) Init(id borges.RepositoryID) (borges.Repository, error) {
 // Get implements the borges.Location interface.
 func (l *Location) Get(id borges.RepositoryID, mode borges.Mode) (borges.Repository, error) {
 	if id == "" {
+		if l.lib.options.Transactional && l.isCheckpointOffsetZero() {
+			return nil, borges.ErrRepositoryNotExists.New(id)
+		}
+
 		return l.repository(id, mode)
 	}
 
@@ -293,16 +297,18 @@ func (l *Location) GetOrInit(id borges.RepositoryID) (borges.Repository, error) 
 	return l.Init(id)
 }
 
+func (l *Location) isCheckpointOffsetZero() bool {
+	l.m.RLock()
+	offsetZero := l.checkpoint.Offset() == 0
+	l.m.RUnlock()
+
+	return offsetZero
+}
+
 // Has implements the borges.Location interface.
 func (l *Location) Has(repoID borges.RepositoryID) (bool, error) {
-	if l.lib.options.Transactional {
-		l.m.RLock()
-		offsetZero := l.checkpoint.Offset() == 0
-		l.m.RUnlock()
-
-		if offsetZero {
-			return false, nil
-		}
+	if l.lib.options.Transactional && l.isCheckpointOffsetZero() {
+		return false, nil
 	}
 
 	repo, err := l.repository("", borges.ReadOnlyMode)
@@ -353,6 +359,15 @@ func (l *Location) Repositories(mode borges.Mode) (borges.RepositoryIterator, er
 			}, nil
 		}
 		return nil, err
+	}
+
+	if l.isCheckpointOffsetZero() {
+		return &repositoryIterator{
+			mode:    mode,
+			loc:     l,
+			pos:     0,
+			remotes: nil,
+		}, nil
 	}
 
 	repo, err := l.repository("", borges.ReadOnlyMode)
